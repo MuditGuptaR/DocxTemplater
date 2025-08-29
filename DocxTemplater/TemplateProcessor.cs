@@ -33,6 +33,8 @@ namespace DocxTemplater
 #endif
             PreProcess(rootElement);
 
+            ProcessMergeFields(rootElement);
+
             var matches = DocxTemplate.IsolateAndMergeTextTemplateMarkers(rootElement);
 
             RemoveLineBreaksAroundSyntaxPatterns(matches);
@@ -284,6 +286,59 @@ namespace DocxTemplater
         public void RegisterExtension(ITemplateProcessorExtension extension)
         {
             Context.RegisterExtension(extension);
+        }
+
+        private void ProcessMergeFields(OpenXmlCompositeElement rootElement)
+        {
+            var mergeFieldParser = new MergeFieldParser();
+            var mergeFields = mergeFieldParser.Parse(rootElement).ToList();
+
+            foreach (var field in mergeFields)
+            {
+                try
+                {
+                    if (field is MergeFieldPattern mergeField)
+                    {
+                        var value = Context.ModelLookup.GetValue(mergeField.FieldName);
+                        ReplaceField(mergeField.Element, value.ToString());
+                    }
+                    else if (field is IfFieldPattern ifField)
+                    {
+                        var condValue = Context.ModelLookup.GetValue(ifField.Condition);
+                        var conditionResult = IsTruthy(condValue);
+                        ReplaceField(ifField.Element, conditionResult ? ifField.TrueText : ifField.FalseText);
+                    }
+                }
+                catch (OpenXmlTemplateException)
+                {
+                    // Ignore fields that are not found in the model
+                }
+            }
+        }
+
+        private void ReplaceField(OpenXmlElement fieldElement, string text)
+        {
+            var newText = new Text(text);
+            if (fieldElement is SimpleField simpleField)
+            {
+                simpleField.Parent.ReplaceChild(newText, simpleField);
+            }
+            else if (fieldElement is Run complexFieldRun)
+            {
+                // This is a simplified replacement for complex fields.
+                // It replaces the run containing the 'Begin' FieldChar with the value.
+                // A more robust implementation would need to remove all parts of the field.
+                // TODO: Implement robust replacement for complex fields.
+                complexFieldRun.Parent.ReplaceChild(newText, complexFieldRun);
+            }
+        }
+
+        private bool IsTruthy(object value)
+        {
+            if (value == null) return false;
+            if (value is bool b) return b;
+            var s = value.ToString().ToLowerInvariant();
+            return s != "false" && s != "0" && s != "";
         }
     }
 }
