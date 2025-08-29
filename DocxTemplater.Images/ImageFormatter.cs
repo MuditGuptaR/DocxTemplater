@@ -3,18 +3,15 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using DocxTemplater.Formatter;
 using SixLabors.ImageSharp;
 using System;
-using System.Text.RegularExpressions;
+using System.Linq;
 using DocxTemplater.ImageBase;
 using A = DocumentFormat.OpenXml.Drawing;
 using DW = DocumentFormat.OpenXml.Drawing.Wordprocessing;
-using System.Linq;
 
 namespace DocxTemplater.Images
 {
     public class ImageFormatter : IFormatter, IImageServiceProvider
     {
-        private static readonly Regex ArgumentRegex = new(@"(?<key>[whr]):(?<value>\d+)(?<unit>px|cm|in|pt|mm)?", RegexOptions.Compiled, TimeSpan.FromMilliseconds(500));
-
         public bool CanHandle(Type type, string prefix)
         {
             var prefixUpper = prefix.ToUpper();
@@ -41,7 +38,7 @@ namespace DocxTemplater.Images
                 // Image ist a child element of a <wps:wsp> (TextBox)
                 if (!TryHandleImageInWordprocessingShape(target, imageInfo, formatterContext.Args.FirstOrDefault() ?? string.Empty, maxPropertyId, templateContext.ImageService))
                 {// Image is not a child element of a <wps:wsp> (TextBox) - rotation and scale is determined by the arguments
-                    AddInlineGraphicToRun(target, imageInfo, maxPropertyId, formatterContext.Args, templateContext.ImageService);
+                    ImageUtils.AddInlineGraphicToRun(target, imageInfo, maxPropertyId, formatterContext.Args, templateContext.ImageService);
                 }
 
             }
@@ -49,52 +46,6 @@ namespace DocxTemplater.Images
             {
                 throw new OpenXmlTemplateException("Could not detect image format", e);
             }
-        }
-
-        /// <summary>
-        /// If image is not part of a textbox this method is used to add the image to the run.
-        /// </summary>
-        private static void AddInlineGraphicToRun(Text target, ImageInformation imageInfo, uint maxDocumentPropertyId, string[] arguments, IImageService imageService)
-        {
-            var propertyId = maxDocumentPropertyId + 1;
-
-            TransformSize(imageInfo.PixelWidth, imageInfo.PixelHeight, arguments, out var cx, out var cy, out var rotation);
-            rotation = rotation.AddUnits(imageInfo.ExifRotation.Units);
-
-            // Define the reference of the image.
-            var drawing =
-                new Drawing(
-                    new DW.Inline(
-                        new DW.Extent { Cx = cx, Cy = cy },
-                        new DW.EffectExtent
-                        {
-                            LeftEdge = 0L,
-                            TopEdge = 0L,
-                            RightEdge = 0L,
-                            BottomEdge = 0L
-                        },
-                        new DW.DocProperties
-                        {
-                            Id = propertyId,
-                            Name = $"Picture {propertyId}"
-                        },
-                        new DW.NonVisualGraphicFrameDrawingProperties(
-                            new A.GraphicFrameLocks { NoChangeAspect = true }),
-                        new A.Graphic(
-                            new A.GraphicData(
-                                    imageService.CreatePicture(imageInfo.ImagePartRelationId, propertyId, cx, cy, rotation)
-                                )
-                            { Uri = "http://schemas.openxmlformats.org/drawingml/2006/picture" })
-                    )
-                    {
-                        DistanceFromTop = (UInt32Value)0U,
-                        DistanceFromBottom = (UInt32Value)0U,
-                        DistanceFromLeft = (UInt32Value)0U,
-                        DistanceFromRight = (UInt32Value)0U
-                    });
-
-            target.InsertAfterSelf(drawing);
-            target.Remove();
         }
 
         private static bool TryHandleImageInWordprocessingShape(Text target, ImageInformation imageInfo,
@@ -139,9 +90,9 @@ namespace DocxTemplater.Images
             return true;
         }
 
-        private static void ReplaceAnchorContentWithPicture(string impagepartRelationShipId, uint maxDocumentPropertyId, Drawing original, ImageRotation imageInfoExifRotation, IImageService imageService)
+        private static void ReplaceAnchorContentWithPicture(string impagepartRelationShipId, uint maxPropertyId, Drawing original, ImageRotation imageInfoExifRotation, IImageService imageService)
         {
-            var propertyId = maxDocumentPropertyId + 1;
+            var propertyId = maxPropertyId + 1;
             var inlineOrAnchor = (OpenXmlElement)original.GetFirstChild<DW.Anchor>() ??
                                  (OpenXmlElement)original.GetFirstChild<DW.Inline>();
             var originaleExtent = inlineOrAnchor.GetFirstChild<DW.Extent>();
@@ -197,101 +148,6 @@ namespace DocxTemplater.Images
             var dw = new Drawing(clonedInlineOrAnchor);
             original.InsertAfterSelf(dw);
             original.Remove();
-        }
-
-
-        /// <summary>
-        /// Transforms the width and height of the image to the size in EMU.
-        /// arguments is in format:
-        /// Examples:
-        /// "w:90px;h:90px;r:90"
-        /// "w:90cm;h:90cm;r:90"
-        /// "h:90cm;r:90"
-        /// "w:90cm;h:90cm"
-        /// "w:90cm;h:90cm;r:90"
-        /// available units are px, cm, in, pt
-        /// </summary>
-        private static void TransformSize(int pixelWidth, int pixelHeight, string[] arguments, out int outCxEmu, out int outCyEmu, out ImageRotation rotationInDegree)
-        {
-            var cxEmu = -1;
-            var cyEmu = -1;
-            rotationInDegree = ImageRotation.CreateFromDegree(0);
-
-            if (arguments == null || arguments.Length == 0)
-            {
-                outCxEmu = OpenXmlHelper.PixelsToEmu(pixelWidth);
-                outCyEmu = OpenXmlHelper.PixelsToEmu(pixelHeight);
-                return;
-            }
-
-            foreach (var argument in arguments)
-            {
-                try
-                {
-                    var matches = ArgumentRegex.Matches(argument);
-                    if (matches.Count == 0)
-                    {
-                        outCxEmu = OpenXmlHelper.PixelsToEmu(pixelWidth);
-                        outCyEmu = OpenXmlHelper.PixelsToEmu(pixelHeight);
-                        return;
-                    }
-
-                    foreach (System.Text.RegularExpressions.Match match in matches)
-                    {
-                        var key = match.Groups["key"].Value;
-                        var value = int.Parse(match.Groups["value"].Value);
-                        var unit = match.Groups["unit"].Value;
-                        switch (key)
-                        {
-                            case "w":
-                                cxEmu = OpenXmlHelper.LengthToEmu(value, unit);
-                                break;
-                            case "h":
-                                cyEmu = OpenXmlHelper.LengthToEmu(value, unit);
-                                break;
-                            case "r":
-                                rotationInDegree = ImageRotation.CreateFromDegree(value);
-                                break;
-                        }
-                    }
-                }
-                catch (RegexMatchTimeoutException)
-                {
-                    throw new OpenXmlTemplateException($"Invalid image formatter argument '{argument}'");
-                }
-            }
-
-            if (cxEmu == -1 && cyEmu == -1)
-            {
-                outCxEmu = OpenXmlHelper.PixelsToEmu(pixelWidth);
-                outCyEmu = OpenXmlHelper.PixelsToEmu(pixelHeight);
-                return;
-            }
-
-            if (cxEmu == -1)
-            {
-                cxEmu = (int)(cyEmu * ((double)pixelWidth / pixelHeight));
-            }
-            else if (cyEmu == -1)
-            {
-                cyEmu = (int)(cxEmu * ((double)pixelHeight / pixelWidth));
-            }
-            else
-            {
-                // if both are set, the aspect ratio is kept
-                var aspectRatio = (double)pixelWidth / pixelHeight;
-                var newAspectRatio = (double)cxEmu / cyEmu;
-                if (aspectRatio > newAspectRatio)
-                {
-                    cyEmu = (int)(cxEmu / aspectRatio);
-                }
-                else
-                {
-                    cxEmu = (int)(cyEmu * aspectRatio);
-                }
-            }
-            outCxEmu = cxEmu;
-            outCyEmu = cyEmu;
         }
 
         public IImageService CreateImageService()

@@ -7,6 +7,7 @@ using DocumentFormat.OpenXml.Wordprocessing;
 using DocxTemplater.Blocks;
 using DocxTemplater.Formatter;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using DocxTemplater.Extensions;
 using DocxTemplater.ImageBase;
@@ -300,13 +301,29 @@ namespace DocxTemplater
                     if (field is MergeFieldPattern mergeField)
                     {
                         var value = Context.ModelLookup.GetValue(mergeField.FieldName);
-                        ReplaceField(mergeField.Element, value.ToString());
+                        if (value is byte[] imageBytes)
+                        {
+                            ReplaceFieldWithImage(mergeField.Element, imageBytes);
+                        }
+                        else
+                        {
+                            ReplaceField(mergeField.Element, value.ToString());
+                        }
                     }
                     else if (field is IfFieldPattern ifField)
                     {
                         var condValue = Context.ModelLookup.GetValue(ifField.Condition);
                         var conditionResult = IsTruthy(condValue);
                         ReplaceField(ifField.Element, conditionResult ? ifField.TrueText : ifField.FalseText);
+                    }
+                    else if (field is IncludePicturePattern includePictureField)
+                    {
+                        var imagePath = Context.ModelLookup.GetValue(includePictureField.PathFieldName).ToString();
+                        if (File.Exists(imagePath))
+                        {
+                            var imageBytes = File.ReadAllBytes(imagePath);
+                            ReplaceFieldWithImage(includePictureField.Element, imageBytes);
+                        }
                     }
                 }
                 catch (OpenXmlTemplateException)
@@ -316,12 +333,25 @@ namespace DocxTemplater
             }
         }
 
+        private void ReplaceFieldWithImage(OpenXmlElement fieldElement, byte[] imageBytes)
+        {
+            if (Context.ImageService == null)
+            {
+                throw new OpenXmlTemplateException("An image was found in the model, but no image formatter has been registered. Please register an image formatter, e.g. by calling `RegisterFormatter(new ImageFormatter())` on the `DocxTemplate` instance.");
+            }
+            var root = fieldElement.GetRoot();
+            var maxPropertyId = Context.ImageService.GetImage(root, imageBytes, out var imageInfo);
+            var drawing = ImageUtils.CreateDrawing(imageInfo, maxPropertyId, null, Context.ImageService);
+            var newRun = new Run(drawing);
+            fieldElement.Parent.ReplaceChild(newRun, fieldElement);
+        }
+
         private void ReplaceField(OpenXmlElement fieldElement, string text)
         {
-            var newText = new Text(text);
+            var newRun = new Run(new Text(text));
             if (fieldElement is SimpleField simpleField)
             {
-                simpleField.Parent.ReplaceChild(newText, simpleField);
+                simpleField.Parent.ReplaceChild(newRun, simpleField);
             }
             else if (fieldElement is Run complexFieldRun)
             {
@@ -329,7 +359,7 @@ namespace DocxTemplater
                 // It replaces the run containing the 'Begin' FieldChar with the value.
                 // A more robust implementation would need to remove all parts of the field.
                 // TODO: Implement robust replacement for complex fields.
-                complexFieldRun.Parent.ReplaceChild(newText, complexFieldRun);
+                complexFieldRun.Parent.ReplaceChild(newRun, complexFieldRun);
             }
         }
 

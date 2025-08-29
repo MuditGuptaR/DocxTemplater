@@ -1,8 +1,8 @@
-using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Wordprocessing;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
+using DocumentFormat.OpenXml;
 
 namespace DocxTemplater
 {
@@ -10,6 +10,7 @@ namespace DocxTemplater
     {
         private static readonly Regex MergeFieldRegex = new Regex(@"^\s*MERGEFIELD\s+""?([^""\s]+)""?\s*\\?\*?\s*[MERGEFORMAT|CHARFORMAT|UPPER|LOWER|FIRSTCAP|CAPS]*\s*$", RegexOptions.IgnoreCase);
         private static readonly Regex IfFieldRegex = new Regex(@"^\s*IF\s+""?([^""\s]+)""?\s+""([^""]*)""\s+""([^""]*)""\s*$", RegexOptions.IgnoreCase);
+        private static readonly Regex IncludePictureRegex = new Regex(@"^\s*INCLUDEPICTURE\s+""MERGEFIELD\s+([^""]+)""\s*$", RegexOptions.IgnoreCase);
 
         public IEnumerable<FieldPattern> Parse(OpenXmlCompositeElement root)
         {
@@ -24,17 +25,24 @@ namespace DocxTemplater
                 {
                     var fieldName = match.Groups[1].Value;
                     fields.Add(new MergeFieldPattern(fieldName, instruction, simpleField));
+                    continue;
                 }
-                else
+
+                match = IfFieldRegex.Match(instruction);
+                if (match.Success)
                 {
-                    match = IfFieldRegex.Match(instruction);
-                    if (match.Success)
-                    {
-                        var condition = match.Groups[1].Value;
-                        var trueText = match.Groups[2].Value;
-                        var falseText = match.Groups[3].Value;
-                        fields.Add(new IfFieldPattern(condition, trueText, falseText, instruction, simpleField));
-                    }
+                    var condition = match.Groups[1].Value;
+                    var trueText = match.Groups[2].Value;
+                    var falseText = match.Groups[3].Value;
+                    fields.Add(new IfFieldPattern(condition, trueText, falseText, instruction, simpleField));
+                    continue;
+                }
+
+                match = IncludePictureRegex.Match(instruction);
+                if (match.Success)
+                {
+                    var pathFieldName = match.Groups[1].Value;
+                    fields.Add(new IncludePicturePattern(pathFieldName, instruction, simpleField));
                 }
             }
 
@@ -56,17 +64,24 @@ namespace DocxTemplater
                         {
                             var fieldName = match.Groups[1].Value;
                             fields.Add(new MergeFieldPattern(fieldName, fieldCode, beginChar.Parent));
+                            continue;
                         }
-                        else
+
+                        match = IfFieldRegex.Match(fieldCode);
+                        if (match.Success)
                         {
-                            match = IfFieldRegex.Match(fieldCode);
-                            if (match.Success)
-                            {
-                                var condition = match.Groups[1].Value;
-                                var trueText = match.Groups[2].Value;
-                                var falseText = match.Groups[3].Value;
-                                fields.Add(new IfFieldPattern(condition, trueText, falseText, fieldCode, beginChar.Parent));
-                            }
+                            var condition = match.Groups[1].Value;
+                            var trueText = match.Groups[2].Value;
+                            var falseText = match.Groups[3].Value;
+                            fields.Add(new IfFieldPattern(condition, trueText, falseText, fieldCode, beginChar.Parent));
+                            continue;
+                        }
+
+                        match = IncludePictureRegex.Match(fieldCode);
+                        if (match.Success)
+                        {
+                            var pathFieldName = match.Groups[1].Value;
+                            fields.Add(new IncludePicturePattern(pathFieldName, fieldCode, beginChar.Parent));
                         }
                     }
                 }

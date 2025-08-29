@@ -3,6 +3,8 @@ using DocumentFormat.OpenXml;
 using DocumentFormat.OpenXml.Packaging;
 using DocumentFormat.OpenXml.Wordprocessing;
 using System.IO;
+using DocxTemplater.Images;
+using System.Linq;
 
 namespace DocxTemplater.Test
 {
@@ -124,6 +126,65 @@ namespace DocxTemplater.Test
             using var resultDoc = WordprocessingDocument.Open(result, false);
             var resultText = resultDoc.MainDocumentPart.Document.Body.InnerText;
             Assert.That(resultText.Replace("\n", ""), Is.EqualTo("Hello and World"));
+        }
+
+        [Test]
+        public void SimpleMergeField_WithImage_IsReplaced()
+        {
+            using var memStream = new MemoryStream();
+            using (var wpDocument = WordprocessingDocument.Create(memStream, WordprocessingDocumentType.Document))
+            {
+                MainDocumentPart mainPart = wpDocument.AddMainDocumentPart();
+                var body = new Body();
+                var paragraph = new Paragraph();
+                var simpleField = new SimpleField() { Instruction = "MERGEFIELD my_image" };
+                var run = new Run(new Text("Default Text"));
+                simpleField.Append(run);
+                paragraph.Append(simpleField);
+                body.Append(paragraph);
+                mainPart.Document = new Document(body);
+                wpDocument.Save();
+            }
+
+            memStream.Position = 0;
+            var docTemplate = new DocxTemplate(memStream);
+            docTemplate.RegisterFormatter(new ImageFormatter());
+            var imageBytes = File.ReadAllBytes("Resources/testImage.jpg");
+            docTemplate.BindModel("my_image", imageBytes);
+            var result = docTemplate.Process();
+
+            result.Position = 0;
+            using var resultDoc = WordprocessingDocument.Open(result, false);
+            Assert.That(resultDoc.MainDocumentPart.Document.Body.Descendants<Drawing>().Count(), Is.EqualTo(1));
+        }
+
+        [Test]
+        public void IncludePictureField_IsReplaced()
+        {
+            using var memStream = new MemoryStream();
+            using (var wpDocument = WordprocessingDocument.Create(memStream, WordprocessingDocumentType.Document))
+            {
+                MainDocumentPart mainPart = wpDocument.AddMainDocumentPart();
+                var body = new Body();
+                var paragraph = new Paragraph();
+                var simpleField = new SimpleField() { Instruction = @"INCLUDEPICTURE ""MERGEFIELD image_path""" };
+                var run = new Run(new Text("Default Text"));
+                simpleField.Append(run);
+                paragraph.Append(simpleField);
+                body.Append(paragraph);
+                mainPart.Document = new Document(body);
+                wpDocument.Save();
+            }
+
+            memStream.Position = 0;
+            var docTemplate = new DocxTemplate(memStream);
+            docTemplate.RegisterFormatter(new ImageFormatter());
+            docTemplate.BindModel("image_path", "Resources/testImage.jpg");
+            var result = docTemplate.Process();
+
+            result.Position = 0;
+            using var resultDoc = WordprocessingDocument.Open(result, false);
+            Assert.That(resultDoc.MainDocumentPart.Document.Body.Descendants<Drawing>().Count(), Is.EqualTo(1));
         }
     }
 }
